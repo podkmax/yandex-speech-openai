@@ -1,0 +1,55 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: tts-server
+  servlet:
+    multipart:
+      max-file-size: ${MAX_FILE_SIZE:10MB}
+      max-request-size: ${MAX_REQUEST_SIZE:10MB}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+app:
+  compat:
+    strict: ${COMPAT_STRICT:false}
+  speechkit:
+    base-url: ${YANDEX_TTS_BASE_URL:https://tts.api.cloud.yandex.net}
+    stt-base-url: ${YANDEX_STT_BASE_URL:https://stt.api.cloud.yandex.net}
+    folder-id: ${YANDEX_FOLDER_ID:}
+    auth-mode: ${YANDEX_SPEECHKIT_AUTH_MODE:iam}
+    api-key: ${YANDEX_API_KEY:}
+    iam-token: ${YANDEX_IAM_TOKEN:}
+    sa-key-file: ${YANDEX_SA_KEY_FILE:}
+    sa-key-json: ${YANDEX_SA_KEY_JSON:}
+    iam-token-url: ${YANDEX_IAM_TOKEN_URL:https://iam.api.cloud.yandex.net/iam/v1/tokens}
+    iam-metadata-enabled: ${YANDEX_IAM_METADATA_ENABLED:false}
+    iam-metadata-url: ${YANDEX_IAM_METADATA_URL:http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token}
+    token-skew-seconds: ${YANDEX_IAM_TOKEN_SKEW_SECONDS:60}
+    token-min-ttl-seconds: ${YANDEX_IAM_MIN_TTL_SECONDS:120}
+    token-refresh-retry-base-millis: ${YANDEX_IAM_REFRESH_RETRY_BASE_MILLIS:200}
+    token-refresh-retry-max-millis: ${YANDEX_IAM_REFRESH_RETRY_MAX_MILLIS:3000}
+    token-refresh-retry-attempts: ${YANDEX_IAM_REFRESH_RETRY_ATTEMPTS:3}
+    max-retry-on-auth-error: ${YANDEX_IAM_MAX_RETRY_ON_AUTH_ERROR:1}
+    default-voice: ${DEFAULT_VOICE:alena}
+    default-language: ${DEFAULT_LANGUAGE:ru-RU}
+    sample-rate-hertz: ${DEFAULT_SAMPLE_RATE_HERTZ:48000}
+    connect-timeout: ${UPSTREAM_CONNECT_TIMEOUT:5s}
+    read-timeout: ${UPSTREAM_READ_TIMEOUT:30s}
+    debug-log-tts-payload: ${DEBUG_LOG_TTS_PAYLOAD:false}
+    voice-mapping:
+      alloy: "${VOICE_MAP_ALLOY:masha}"
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} level=%-5level request_id=%X{request_id:-} path=%X{path:-} logger=%logger{36} - %msg%n"
+  level:
+    root: debug
