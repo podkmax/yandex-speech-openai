@@ -68,8 +68,16 @@ public class SpeechKitProperties {
 
     private Map<String, String> voiceMapping = new HashMap<>();
 
+    @NotNull
+    private TtsProperties tts = new TtsProperties();
+
     @Min(8000)
     private int sampleRateHertz = 48000;
+
+    private boolean requireKnownAsrFormat;
+
+    @NotNull
+    private AsrNormalizeProperties asrNormalize = new AsrNormalizeProperties();
 
     @NotNull
     private Duration connectTimeout = Duration.ofSeconds(5);
@@ -244,12 +252,36 @@ public class SpeechKitProperties {
         this.voiceMapping = voiceMapping;
     }
 
+    public TtsProperties getTts() {
+        return tts;
+    }
+
+    public void setTts(TtsProperties tts) {
+        this.tts = tts;
+    }
+
     public int getSampleRateHertz() {
         return sampleRateHertz;
     }
 
     public void setSampleRateHertz(int sampleRateHertz) {
         this.sampleRateHertz = sampleRateHertz;
+    }
+
+    public boolean isRequireKnownAsrFormat() {
+        return requireKnownAsrFormat;
+    }
+
+    public void setRequireKnownAsrFormat(boolean requireKnownAsrFormat) {
+        this.requireKnownAsrFormat = requireKnownAsrFormat;
+    }
+
+    public AsrNormalizeProperties getAsrNormalize() {
+        return asrNormalize;
+    }
+
+    public void setAsrNormalize(AsrNormalizeProperties asrNormalize) {
+        this.asrNormalize = asrNormalize;
     }
 
     public Duration getConnectTimeout() {
@@ -274,5 +306,162 @@ public class SpeechKitProperties {
 
     public void setDebugLogTtsPayload(boolean debugLogTtsPayload) {
         this.debugLogTtsPayload = debugLogTtsPayload;
+    }
+
+    public static class AsrNormalizeProperties {
+
+        private boolean enabled;
+
+        @NotBlank
+        private String ffmpegPath = "ffmpeg";
+
+        private String tempDir;
+
+        @Min(1)
+        private long maxInputBytes = 25L * 1024L * 1024L;
+
+        @Min(0)
+        private int maxDurationSeconds;
+
+        @Min(1)
+        private long timeoutMs = 15000;
+
+        @Min(8000)
+        private int targetSampleRateHertz = 16000;
+
+        @Min(1)
+        private int targetChannels = 1;
+
+        @Min(1)
+        private int maxStderrBytes = 8192;
+
+        @Min(1)
+        private Integer concurrencyMaxProcesses;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getFfmpegPath() {
+            return ffmpegPath;
+        }
+
+        public void setFfmpegPath(String ffmpegPath) {
+            this.ffmpegPath = ffmpegPath;
+        }
+
+        public String getTempDir() {
+            return tempDir;
+        }
+
+        public void setTempDir(String tempDir) {
+            this.tempDir = tempDir;
+        }
+
+        public long getMaxInputBytes() {
+            return maxInputBytes;
+        }
+
+        public void setMaxInputBytes(long maxInputBytes) {
+            this.maxInputBytes = maxInputBytes;
+        }
+
+        public int getMaxDurationSeconds() {
+            return maxDurationSeconds;
+        }
+
+        public void setMaxDurationSeconds(int maxDurationSeconds) {
+            this.maxDurationSeconds = maxDurationSeconds;
+        }
+
+        public long getTimeoutMs() {
+            return timeoutMs;
+        }
+
+        public void setTimeoutMs(long timeoutMs) {
+            this.timeoutMs = timeoutMs;
+        }
+
+        public int getTargetSampleRateHertz() {
+            return targetSampleRateHertz;
+        }
+
+        public void setTargetSampleRateHertz(int targetSampleRateHertz) {
+            this.targetSampleRateHertz = targetSampleRateHertz;
+        }
+
+        public int getTargetChannels() {
+            return targetChannels;
+        }
+
+        public void setTargetChannels(int targetChannels) {
+            this.targetChannels = targetChannels;
+        }
+
+        public int getMaxStderrBytes() {
+            return maxStderrBytes;
+        }
+
+        public void setMaxStderrBytes(int maxStderrBytes) {
+            this.maxStderrBytes = maxStderrBytes;
+        }
+
+        public Integer getConcurrencyMaxProcesses() {
+            return concurrencyMaxProcesses;
+        }
+
+        public void setConcurrencyMaxProcesses(Integer concurrencyMaxProcesses) {
+            this.concurrencyMaxProcesses = concurrencyMaxProcesses;
+        }
+    }
+
+    public static class TtsProperties {
+
+        private Map<String, VoiceSettingsProperties> voiceSettings = new HashMap<>();
+
+        public Map<String, VoiceSettingsProperties> getVoiceSettings() {
+            return voiceSettings;
+        }
+
+        public void setVoiceSettings(Map<String, VoiceSettingsProperties> voiceSettings) {
+            this.voiceSettings = voiceSettings;
+        }
+    }
+
+    public static class VoiceSettingsProperties {
+
+        private String role;
+
+        private Double speed;
+
+        private Double pitch;
+
+        public String getRole() {
+            return role;
+        }
+
+        public void setRole(String role) {
+            this.role = role;
+        }
+
+        public Double getSpeed() {
+            return speed;
+        }
+
+        public void setSpeed(Double speed) {
+            this.speed = speed;
+        }
+
+        public Double getPitch() {
+            return pitch;
+        }
+
+        public void setPitch(Double pitch) {
+            this.pitch = pitch;
+        }
     }
 }

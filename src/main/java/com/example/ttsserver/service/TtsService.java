@@ -24,6 +24,10 @@ public class TtsService {
         String requestId = currentRequestId();
         AudioFormat format = AudioFormat.fromOpenAi(request.response_format());
         String voice = mapVoice(request.voice());
+        SpeechKitProperties.VoiceSettingsProperties voiceSettings = resolveVoiceSettings(voice);
+        Double speed = request.speed() != null ? request.speed() : voiceSettings.getSpeed();
+        String role = voiceSettings.getRole();
+        Double pitch = voiceSettings.getPitch();
         log.info("TTS synthesis prepared request_id={} requested_voice={} mapped_voice={} audio_format={} wav_wrap={}",
                 requestId,
                 request.voice(),
@@ -34,7 +38,9 @@ public class TtsService {
                 request.input(),
                 voice,
                 properties.getDefaultLanguage(),
-                request.speed(),
+                speed,
+                role,
+                pitch,
                 format
         );
 
@@ -57,5 +63,10 @@ public class TtsService {
             return properties.getDefaultVoice();
         }
         return properties.getVoiceMapping().getOrDefault(requestedVoice, requestedVoice);
+    }
+
+    private SpeechKitProperties.VoiceSettingsProperties resolveVoiceSettings(String speechKitVoice) {
+        return properties.getTts().getVoiceSettings()
+                .getOrDefault(speechKitVoice, new SpeechKitProperties.VoiceSettingsProperties());
     }
 }

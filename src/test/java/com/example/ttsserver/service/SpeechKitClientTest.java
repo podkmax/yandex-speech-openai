@@ -11,11 +11,16 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -84,6 +89,30 @@ class SpeechKitClientTest {
     }
 
     @Test
+    void includesRoleAndPitchShiftHintsInTtsV3Request() throws Exception {
+        String encoded = Base64.getEncoder().encodeToString(new byte[]{1, 2, 3});
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .setHeader(HttpHeaders.CONTENT_TYPE, "application/json")
+                .setBody("{\"result\":{\"audioChunk\":{\"data\":\"" + encoded + "\"}}}"));
+
+        SpeechKitClient client = new SpeechKitClient(
+                RestClient.builder().baseUrl(server.url("/").toString()).build(),
+                RestClient.builder().baseUrl(server.url("/").toString()).build(),
+                testProperties(),
+                new FixedTokenProvider("iam-token")
+        );
+
+        byte[] bytes = client.synthesize("hello", "masha", "ru-RU", null, "friendly", 120.0, AudioFormat.MP3);
+        assertThat(bytes).containsExactly((byte) 1, (byte) 2, (byte) 3);
+
+        RecordedRequest request = server.takeRequest();
+        assertThat(request.getBody().readUtf8()).contains("\"voice\":\"masha\"")
+                .contains("\"role\":\"friendly\"")
+                .contains("\"pitchShift\":120.0")
+                .doesNotContain("\"speed\"");
+    }
+
+    @Test
     void decodesUnpaddedAudioChunkData() {
         String unpadded = "SUQzBA";
         server.enqueue(new MockResponse().setResponseCode(200)
@@ -117,8 +146,77 @@ class SpeechKitClientTest {
                 new FixedTokenProvider("iam-token")
         );
 
-        String result = client.recognize("abc".getBytes(), "a.wav", "ru-RU");
+        String result = client.recognize("abc".getBytes(), "a.wav", "ru-RU", null, null);
         assertThat(result).isEqualTo("ok text");
+
+        RecordedRequest request;
+        try {
+            request = server.takeRequest(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        assertThat(request).isNotNull();
+        assertThat(request.getMethod()).isEqualTo("POST");
+        assertThat(request.getHeader(HttpHeaders.AUTHORIZATION)).isEqualTo("Bearer iam-token");
+        assertThat(request.getHeader(HttpHeaders.CONTENT_TYPE))
+                .startsWith(MediaType.APPLICATION_OCTET_STREAM_VALUE)
+                .doesNotContain("multipart/form-data");
+        assertThat(request.getBody().readByteArray()).containsExactly("abc".getBytes());
+
+        URI uri = URI.create("http://localhost" + request.getPath());
+        Map<String, String> params = queryParams(uri.getRawQuery());
+        assertThat(uri.getPath()).isEqualTo("/speech/v1/stt:recognize");
+        assertThat(params).containsEntry("folderId", "folder");
+        assertThat(params).containsEntry("lang", "ru-RU");
+    }
+
+    @Test
+    void sttUsesApiKeyHeaderWhenConfigured() throws Exception {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .setHeader(HttpHeaders.CONTENT_TYPE, "application/json")
+                .setBody("{\"result\":\"ok text\"}"));
+
+        SpeechKitProperties properties = testProperties();
+        properties.setAuthMode(SpeechKitProperties.AuthMode.API_KEY);
+        properties.setApiKey("stt-api-key");
+
+        SpeechKitClient client = new SpeechKitClient(
+                RestClient.builder().baseUrl(server.url("/").toString()).build(),
+                RestClient.builder().baseUrl(server.url("/").toString()).build(),
+                properties,
+                new FixedTokenProvider("iam-token")
+        );
+
+        String result = client.recognize("abc".getBytes(), "a.wav", "ru-RU", null, null);
+        assertThat(result).isEqualTo("ok text");
+
+        RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(request).isNotNull();
+        assertThat(request.getHeader(HttpHeaders.AUTHORIZATION)).isEqualTo("Api-Key stt-api-key");
+    }
+
+    @Test
+    void sttAddsFormatAndSampleRateQueryParamsWhenProvided() throws Exception {
+        server.enqueue(new MockResponse().setResponseCode(200)
+                .setHeader(HttpHeaders.CONTENT_TYPE, "application/json")
+                .setBody("{\"result\":\"ok text\"}"));
+
+        SpeechKitClient client = new SpeechKitClient(
+                RestClient.builder().baseUrl(server.url("/").toString()).build(),
+                RestClient.builder().baseUrl(server.url("/").toString()).build(),
+                testProperties(),
+                new FixedTokenProvider("iam-token")
+        );
+
+        String result = client.recognize("abc".getBytes(), "audio.wav", "ru-RU", "lpcm", 48000);
+        assertThat(result).isEqualTo("ok text");
+
+        RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(request).isNotNull();
+        URI uri = URI.create("http://localhost" + request.getPath());
+        Map<String, String> params = queryParams(uri.getRawQuery());
+        assertThat(params).containsEntry("format", "lpcm");
+        assertThat(params).containsEntry("sampleRateHertz", "48000");
     }
 
     @Test
@@ -190,12 +288,52 @@ class SpeechKitClientTest {
         }
     }
 
+    @Test
+    void mapsUnexpectedRuntimeExceptionDuringTtsCallToBadGateway() throws Exception {
+        String requestId = "test-runtime-" + UUID.randomUUID();
+        SpeechKitClient client = new SpeechKitClient(
+                RestClient.builder().baseUrl(server.url("/").toString()).build(),
+                RestClient.builder().baseUrl(server.url("/").toString()).build(),
+                testProperties(),
+                new ThrowingTokenProvider(new IllegalArgumentException("token provider failed"))
+        );
+
+        MDC.put("request_id", requestId);
+        try {
+            assertThatThrownBy(() -> client.synthesize("hello", "masha", "ru-RU", null, AudioFormat.MP3))
+                    .isInstanceOf(ApiException.class)
+                    .satisfies(ex -> {
+                        ApiException api = (ApiException) ex;
+                        assertThat(api.getStatus()).isEqualTo(HttpStatus.BAD_GATEWAY);
+                        assertThat(api.getCode()).isEqualTo("upstream_error");
+                        assertThat(api.getMessage()).isEqualTo("Upstream service error");
+                    });
+            assertThat(server.takeRequest(200, TimeUnit.MILLISECONDS)).isNull();
+        } finally {
+            MDC.remove("request_id");
+        }
+    }
+
     private SpeechKitProperties testProperties() {
         SpeechKitProperties p = new SpeechKitProperties();
         p.setAuthMode(SpeechKitProperties.AuthMode.IAM);
         p.setFolderId("folder");
         p.setMaxRetryOnAuthError(0);
         return p;
+    }
+
+    private Map<String, String> queryParams(String rawQuery) {
+        Map<String, String> params = new LinkedHashMap<>();
+        if (rawQuery == null || rawQuery.isBlank()) {
+            return params;
+        }
+        for (String pair : rawQuery.split("&")) {
+            String[] kv = pair.split("=", 2);
+            String key = kv[0];
+            String value = kv.length > 1 ? kv[1] : "";
+            params.put(key, value);
+        }
+        return params;
     }
 
     private static final class FixedTokenProvider implements TokenProvider {
@@ -239,6 +377,24 @@ class SpeechKitClientTest {
 
         int refreshCalls() {
             return refreshCalls.get();
+        }
+    }
+
+    private static final class ThrowingTokenProvider implements TokenProvider {
+
+        private final RuntimeException ex;
+
+        private ThrowingTokenProvider(RuntimeException ex) {
+            this.ex = ex;
+        }
+
+        @Override
+        public String getToken() {
+            throw ex;
+        }
+
+        @Override
+        public void forceRefresh() {
         }
     }
 }

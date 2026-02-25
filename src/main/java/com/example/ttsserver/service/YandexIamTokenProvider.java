@@ -12,6 +12,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -28,12 +29,18 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class YandexIamTokenProvider implements TokenProvider {
 
     private static final TypeReference<Map<String, String>> MAP_OF_STRING = new TypeReference<>() {
     };
+    private static final Pattern PRIVATE_KEY_PEM_PATTERN = Pattern.compile(
+            "-----BEGIN (RSA PRIVATE KEY|PRIVATE KEY)-----(.*?)-----END \\1-----",
+            Pattern.DOTALL
+    );
 
     private final SpeechKitProperties properties;
     private final RestClient restClient;
@@ -248,12 +255,75 @@ public class YandexIamTokenProvider implements TokenProvider {
     }
 
     private PrivateKey readPrivateKey(String pem) throws GeneralSecurityException {
-        String normalized = pem
-                .replace("-----BEGIN PRIVATE KEY-----", "")
-                .replace("-----END PRIVATE KEY-----", "")
-                .replaceAll("\\s", "");
-        byte[] pkcs8 = Base64.getDecoder().decode(normalized);
-        return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
+        String value = trimToNull(pem);
+        if (value == null) {
+            throw configError("Service account private_key is invalid (empty)");
+        }
+
+        Matcher matcher = PRIVATE_KEY_PEM_PATTERN.matcher(value);
+        if (!matcher.find()) {
+            throw configError("Service account private_key is invalid (not base64 PEM)");
+        }
+
+        boolean pkcs1 = "RSA PRIVATE KEY".equals(matcher.group(1));
+        String normalized = matcher.group(2).replaceAll("\\s", "");
+
+        byte[] keyBytes;
+        try {
+            keyBytes = Base64.getDecoder().decode(normalized);
+        } catch (IllegalArgumentException ex) {
+            throw configError("Service account private_key is invalid (not base64 PEM)");
+        }
+
+        byte[] pkcs8 = pkcs1 ? toPkcs8FromPkcs1(keyBytes) : keyBytes;
+        try {
+            return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
+        } catch (GeneralSecurityException ex) {
+            throw configError("Service account private_key is invalid or unsupported");
+        }
+    }
+
+    private byte[] toPkcs8FromPkcs1(byte[] pkcs1) {
+        byte[] version = new byte[]{0x02, 0x01, 0x00};
+        byte[] rsaAlgorithmIdentifier = new byte[]{
+                0x30, 0x0d,
+                0x06, 0x09,
+                0x2a, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xf7, 0x0d, 0x01, 0x01, 0x01,
+                0x05, 0x00
+        };
+
+        byte[] privateKeyOctetString = derEncode((byte) 0x04, pkcs1);
+        byte[] body = new byte[version.length + rsaAlgorithmIdentifier.length + privateKeyOctetString.length];
+        System.arraycopy(version, 0, body, 0, version.length);
+        System.arraycopy(rsaAlgorithmIdentifier, 0, body, version.length, rsaAlgorithmIdentifier.length);
+        System.arraycopy(privateKeyOctetString, 0, body, version.length + rsaAlgorithmIdentifier.length, privateKeyOctetString.length);
+        return derEncode((byte) 0x30, body);
+    }
+
+    private byte[] derEncode(byte tag, byte[] value) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(tag);
+        writeDerLength(out, value.length);
+        out.writeBytes(value);
+        return out.toByteArray();
+    }
+
+    private void writeDerLength(ByteArrayOutputStream out, int length) {
+        if (length < 0x80) {
+            out.write(length);
+            return;
+        }
+
+        int size = 0;
+        int current = length;
+        while (current > 0) {
+            size++;
+            current >>= 8;
+        }
+        out.write(0x80 | size);
+        for (int i = size - 1; i >= 0; i--) {
+            out.write((length >> (8 * i)) & 0xff);
+        }
     }
 
     private String toJson(Map<String, Object> payload) {

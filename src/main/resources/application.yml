@@ -42,11 +42,35 @@ app:
     default-voice: ${DEFAULT_VOICE:alena}
     default-language: ${DEFAULT_LANGUAGE:ru-RU}
     sample-rate-hertz: ${DEFAULT_SAMPLE_RATE_HERTZ:48000}
+    require-known-asr-format: ${ASR_REQUIRE_KNOWN_FORMAT:false}
+    asr-normalize:
+      enabled: ${ASR_NORMALIZE_ENABLED:false}
+      ffmpeg-path: ${ASR_NORMALIZE_FFMPEG_PATH:ffmpeg}
+      temp-dir: ${ASR_NORMALIZE_TEMP_DIR:}
+      max-input-bytes: ${ASR_NORMALIZE_MAX_INPUT_BYTES:26214400}
+      max-duration-seconds: ${ASR_NORMALIZE_MAX_DURATION_SECONDS:0}
+      timeout-ms: ${ASR_NORMALIZE_TIMEOUT_MS:15000}
+      target-sample-rate-hertz: ${ASR_NORMALIZE_TARGET_SAMPLE_RATE_HERTZ:16000}
+      target-channels: ${ASR_NORMALIZE_TARGET_CHANNELS:1}
+      max-stderr-bytes: ${ASR_NORMALIZE_MAX_STDERR_BYTES:8192}
+      concurrency-max-processes: ${ASR_NORMALIZE_CONCURRENCY_MAX_PROCESSES:}
     connect-timeout: ${UPSTREAM_CONNECT_TIMEOUT:5s}
     read-timeout: ${UPSTREAM_READ_TIMEOUT:30s}
     debug-log-tts-payload: ${DEBUG_LOG_TTS_PAYLOAD:false}
     voice-mapping:
       alloy: "${VOICE_MAP_ALLOY:masha}"
+    tts:
+      # Example:
+      # voice-settings:
+      #   masha:
+      #     role: "friendly"
+      #     speed: 1.0
+      #     pitch: 120.0
+      voice-settings:
+        masha:
+          role: "strict"
+          speed: 1.2
+          pitch: 100.0
 
 logging:
   pattern:

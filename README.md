@@ -44,6 +44,34 @@ Optional:
 - `YANDEX_IAM_REFRESH_RETRY_MAX_MILLIS=3000`
 - `YANDEX_IAM_REFRESH_RETRY_ATTEMPTS=3`
 - `YANDEX_IAM_MAX_RETRY_ON_AUTH_ERROR=1`
+- `ASR_REQUIRE_KNOWN_FORMAT=false` (set `true` to reject uploads without `.wav`/`.ogg`/`.mp3` extension)
+- `ASR_NORMALIZE_ENABLED=false` (enable ffmpeg normalization before STT)
+- `ASR_NORMALIZE_FFMPEG_PATH=ffmpeg`
+- `ASR_NORMALIZE_TEMP_DIR=` (empty -> system temp dir)
+- `ASR_NORMALIZE_MAX_INPUT_BYTES=26214400`
+- `ASR_NORMALIZE_MAX_DURATION_SECONDS=0` (`0` disables duration cap)
+- `ASR_NORMALIZE_TIMEOUT_MS=15000`
+- `ASR_NORMALIZE_TARGET_SAMPLE_RATE_HERTZ=16000`
+- `ASR_NORMALIZE_TARGET_CHANNELS=1`
+- `ASR_NORMALIZE_MAX_STDERR_BYTES=8192`
+- `ASR_NORMALIZE_CONCURRENCY_MAX_PROCESSES=` (empty -> no process concurrency cap)
+
+TTS per-voice synthesis hints (configured in YAML):
+
+```yaml
+app:
+  speechkit:
+    tts:
+      voice-settings:
+        masha:
+          role: friendly
+          speed: 0.95
+          pitch: 120.0
+```
+
+- `voice-settings` key is SpeechKit voice name after voice mapping (`alloy` -> `masha` by default).
+- `speed` precedence: request `speed` field overrides config; if request omits speed, configured speed is used.
+- `pitch` is sent to Yandex TTS v3 as the `pitchShift` hint field.
 
 ## Build and test
 
@@ -112,6 +140,12 @@ curl -X POST http://localhost:8081/v1/audio/transcriptions \
 - SSE streaming (`stream_format=sse`) is intentionally not supported in MVP.
 - Unsupported ASR fields are ignored by default; set `COMPAT_STRICT=true` to return `400` for unknown fields.
 - TTS is routed to SpeechKit API v3 REST endpoint (`/tts/v3/utteranceSynthesis`), while ASR remains on v1.
+- ASR v1 sends raw audio bytes (`application/octet-stream`) to `/speech/v1/stt:recognize` with `folderId`/`lang` in query params.
+- ASR auto-detects input by filename extension: `.wav` -> `format=lpcm`, `.ogg` -> `format=oggopus`, `.mp3` -> `format=mp3`.
+- For `.wav`, proxy reads RIFF/WAVE `fmt ` chunk and sends `sampleRateHertz` from the header; if header parsing fails, it falls back to `DEFAULT_SAMPLE_RATE_HERTZ`.
+- `.wav` must be PCM 16-bit (`audioFormat=1`, `bitsPerSample=16`), otherwise request returns `400` with conversion hint.
+- With `ASR_NORMALIZE_ENABLED=true`, proxy normalizes uploaded audio with ffmpeg to mono PCM s16le WAV and sends STT v1 request as `format=lpcm` plus `sampleRateHertz=ASR_NORMALIZE_TARGET_SAMPLE_RATE_HERTZ`.
+- If ffmpeg is unavailable while normalization is enabled, request returns `502` with `code=upstream_unavailable`.
 - TTS always uses IAM token; in `api_key` mode ASR v1 can still use API key if `YANDEX_API_KEY` is set.
 - On SpeechKit `401/403`, IAM token is refreshed and request is retried once.
 - `voice=alloy` maps to SpeechKit voice `masha` by default.

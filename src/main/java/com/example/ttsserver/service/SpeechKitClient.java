@@ -7,15 +7,11 @@ import com.example.ttsserver.error.ApiException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
@@ -54,28 +50,30 @@ public class SpeechKitClient {
     }
 
     public byte[] synthesize(String text, String voice, String lang, Double speed, AudioFormat format) {
+        return synthesize(text, voice, lang, speed, null, null, format);
+    }
+
+    public byte[] synthesize(String text,
+                             String voice,
+                             String lang,
+                             Double speed,
+                             String role,
+                             Double pitch,
+                             AudioFormat format) {
+        String requestId = currentRequestId();
+        String outputAudioSpecType = outputAudioSpecType(format);
+        log.info("Calling TTS upstream request_id={} endpoint={} output_audio_spec_type={} format={}",
+                requestId, TTS_SYNTHESIS_PATH, outputAudioSpecType, format);
+
+        ResponseEntity<String> responseEntity;
         try {
-            String requestId = currentRequestId();
-            String outputAudioSpecType = outputAudioSpecType(format);
-            log.info("Calling TTS upstream request_id={} endpoint={} output_audio_spec_type={} format={}",
-                    requestId, TTS_SYNTHESIS_PATH, outputAudioSpecType, format);
-            ResponseEntity<String> responseEntity = executeWithAuthRetry(true, () -> ttsRestClient.post()
+            responseEntity = executeWithAuthRetry(true, () -> ttsRestClient.post()
                     .uri(TTS_SYNTHESIS_PATH)
                     .headers(this::setTtsHeaders)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(utteranceSynthesisBody(text, voice, speed, format))
+                    .body(utteranceSynthesisBody(text, voice, speed, role, pitch, format))
                     .retrieve()
                     .toEntity(String.class));
-            String contentType = responseEntity.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE);
-            int bodyLength = responseEntity.getBody() == null ? 0 : responseEntity.getBody().length();
-            log.info("TTS upstream response received request_id={} endpoint={} status={} content_type={} body_length={}",
-                    requestId,
-                    TTS_SYNTHESIS_PATH,
-                    responseEntity.getStatusCode().value(),
-                    contentType,
-                    bodyLength);
-            Map<?, ?> response = parseJsonObject(responseEntity.getBody(), requestId, contentType);
-            return decodeAudioChunk(response, responseEntity.getBody(), requestId, contentType);
         } catch (RestClientResponseException ex) {
             throw mapUpstreamException(ex, "tts");
         } catch (ResourceAccessException ex) {
@@ -83,34 +81,47 @@ public class SpeechKitClient {
                 throw new ApiException(HttpStatus.GATEWAY_TIMEOUT, "Upstream timeout", "server_error", null, "upstream_timeout");
             }
             throw new ApiException(HttpStatus.BAD_GATEWAY, "Upstream connection error", "server_error", null, "upstream_error");
-        } catch (IllegalArgumentException ex) {
-            throw new ApiException(HttpStatus.BAD_GATEWAY, "Upstream returned invalid audio payload", "server_error", "tts", "upstream_error");
+        } catch (RuntimeException ex) {
+            if (ex instanceof ApiException apiException) {
+                throw apiException;
+            }
+            log.error("Unexpected runtime exception during TTS upstream call request_id={} endpoint={} exception_class={} message={}",
+                    requestId, TTS_SYNTHESIS_PATH, ex.getClass().getName(), ex.getMessage(), ex);
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "Upstream service error", "server_error", "tts", "upstream_error");
         }
+
+        String contentType = responseEntity.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE);
+        int bodyLength = responseEntity.getBody() == null ? 0 : responseEntity.getBody().length();
+        log.info("TTS upstream response received request_id={} endpoint={} status={} content_type={} body_length={}",
+                requestId,
+                TTS_SYNTHESIS_PATH,
+                responseEntity.getStatusCode().value(),
+                contentType,
+                bodyLength);
+        Map<?, ?> response = parseJsonObject(responseEntity.getBody(), requestId, contentType);
+        return decodeAudioChunk(response, responseEntity.getBody(), requestId, contentType);
     }
 
-    public String recognize(byte[] bytes, String filename, String language) {
-        HttpHeaders fileHeaders = new HttpHeaders();
-        fileHeaders.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-
-        ByteArrayResource resource = new ByteArrayResource(bytes) {
-            @Override
-            public String getFilename() {
-                return filename == null ? "audio" : filename;
-            }
-        };
-
-        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-        body.add("file", new HttpEntity<>(resource, fileHeaders));
-        body.add("folderId", properties.getFolderId());
-        body.add("lang", language);
-
+    public String recognize(byte[] bytes, String filename, String language, String format, Integer sampleRateHertz) {
         try {
             boolean iamAuth = useIamForStt();
             Map<?, ?> response = executeWithAuthRetry(iamAuth, () -> sttRestClient.post()
-                    .uri("/speech/v1/stt:recognize")
+                    .uri(uriBuilder -> {
+                        var builder = uriBuilder
+                                .path("/speech/v1/stt:recognize")
+                                .queryParam("folderId", properties.getFolderId())
+                                .queryParam("lang", language);
+                        if (format != null && !format.isBlank()) {
+                            builder.queryParam("format", format);
+                        }
+                        if (sampleRateHertz != null) {
+                            builder.queryParam("sampleRateHertz", sampleRateHertz);
+                        }
+                        return builder.build();
+                    })
                     .headers(this::setSttHeaders)
-                    .contentType(MediaType.MULTIPART_FORM_DATA)
-                    .body(body)
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .body(bytes)
                     .retrieve()
                     .body(Map.class));
             Object result = response == null ? null : response.get("result");
@@ -145,14 +156,31 @@ public class SpeechKitClient {
         if (status.is5xxServerError()) {
             return new ApiException(HttpStatus.BAD_GATEWAY, "Upstream service error", "server_error", param, "upstream_error");
         }
+        if (status == HttpStatus.BAD_REQUEST) {
+            log.debug("SpeechKit upstream bad request status={} param={} body={}",
+                    status.value(),
+                    param,
+                    ex.getResponseBodyAsString());
+        }
         return new ApiException(HttpStatus.BAD_REQUEST, "Upstream rejected request", "invalid_request_error", param, "upstream_bad_request");
     }
 
-    private Map<String, Object> utteranceSynthesisBody(String text, String voice, Double speed, AudioFormat format) {
+    private Map<String, Object> utteranceSynthesisBody(String text,
+                                                       String voice,
+                                                       Double speed,
+                                                       String role,
+                                                       Double pitch,
+                                                       AudioFormat format) {
         List<Map<String, Object>> hints = new ArrayList<>();
         hints.add(Map.of("voice", voice));
+        if (role != null && !role.isBlank()) {
+            hints.add(Map.of("role", role));
+        }
         if (speed != null) {
             hints.add(Map.of("speed", speed));
+        }
+        if (pitch != null) {
+            hints.add(Map.of("pitchShift", pitch));
         }
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -214,7 +242,7 @@ public class SpeechKitClient {
             if (properties.isDebugLogTtsPayload()) {
                 dumpRawUpstreamResponse(rawResponseBody, requestId);
             }
-            throw ex;
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "Upstream returned invalid audio payload", "server_error", "tts", "upstream_error");
         }
     }
 
